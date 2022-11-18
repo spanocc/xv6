@@ -1,0 +1,16 @@
+{
+    "files.associations": {
+        "user.h": "c",
+        "types.h": "c",
+        "stat.h": "c",
+        "*.tcc": "c",
+        "string": "c",
+        "unordered_map": "c",
+        "unordered_set": "c",
+        "functional": "c",
+        "string_view": "c",
+        "ratio": "c",
+        "streambuf": "c",
+        "fs.h": "c"
+    }
+}
