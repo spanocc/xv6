@@ -7,6 +7,10 @@
 #include "spinlock.h"
 #include "proc.h"
 
+uint64 collect_mem();
+uint64 collect_proc();
+
+
 uint64
 sys_exit(void)
 {
@@ -94,4 +98,39 @@ sys_uptime(void)
   xticks = ticks;
   release(&tickslock);
   return xticks;
+}
+
+// 只需要给自己的掩码设置上即可，fork/exec时掩码还会有
+uint64 sys_trace(void) {
+  int mask;
+  if(argint(0, &mask) < 0)
+    return -1;                  
+  
+  struct proc* p = myproc();
+  p->trace_mask = mask;   
+  return 0;
+}
+
+uint64 sys_sysinfo(void) {
+  struct proc *p = myproc();
+  uint64 addr;
+  uint64 freemem;
+  uint64 nproc;
+  if(argaddr(0, &addr) < 0) {
+    return -1;
+  }
+
+  //printf("%x\n", addr);
+  
+  freemem = collect_mem();
+  nproc = collect_proc();
+
+  if(copyout(p->pagetable, addr, (char *)&freemem, sizeof(freemem)) < 0) {
+    return -1;
+  }
+  if(copyout(p->pagetable, addr + sizeof(uint64), (char *)&nproc, sizeof(nproc)) < 0) {
+    return -1;
+  }
+
+  return 0;
 }

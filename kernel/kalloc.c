@@ -9,6 +9,7 @@
 #include "riscv.h"
 #include "defs.h"
 
+
 void freerange(void *pa_start, void *pa_end);
 
 extern char end[]; // first address after kernel.
@@ -79,4 +80,18 @@ kalloc(void)
   if(r)
     memset((char*)r, 5, PGSIZE); // fill with junk
   return (void*)r;
+}
+
+// 收集可用内存
+// 以4096个字节为单位， 空闲内存构成一个链表， 空闲地址的前8个字节指向下一个空闲地址
+uint64 collect_mem() {
+
+  uint64 freemem = 0;
+  struct run* r = kmem.freelist;
+  while(r) {
+    freemem ++;
+    r = r->next;
+  }
+  freemem *= 4096;
+  return freemem;
 }
