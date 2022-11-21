@@ -1,0 +1,8 @@
+{
+    "files.associations": {
+        "riscv.h": "c",
+        "string_view": "c",
+        "system_error": "c",
+        "defs.h": "c"
+    }
+}
