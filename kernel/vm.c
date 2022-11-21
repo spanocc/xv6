@@ -15,6 +15,7 @@ extern char etext[];  // kernel.ld sets this to end of kernel code.
 
 extern char trampoline[]; // trampoline.S
 
+
 /*
  * create a direct-map page table for the kernel.
  */
@@ -45,6 +46,9 @@ kvminit()
   // map the trampoline for trap entry/exit to
   // the highest virtual address in the kernel.
   kvmmap(TRAMPOLINE, (uint64)trampoline, PGSIZE, PTE_R | PTE_X);
+
+  // uint64 b = *walk(kernel_pagetable, VIRTIO0 ,0);
+  // printf("k:%p\n",b);
 }
 
 // Switch h/w page table register to the kernel's page table,
@@ -68,6 +72,7 @@ kvminithart()
 //   21..29 -- 9 bits of level-1 index.
 //   12..20 -- 9 bits of level-0 index.
 //    0..11 -- 12 bits of byte offset within the page.
+// 找到最深层的表项（leaf),没有就申请内存创建,只有leaf表项才有可读，可写，可执行的标志
 pte_t *
 walk(pagetable_t pagetable, uint64 va, int alloc)
 {
@@ -131,8 +136,10 @@ kvmpa(uint64 va)
   uint64 off = va % PGSIZE;
   pte_t *pte;
   uint64 pa;
-  
-  pte = walk(kernel_pagetable, va, 0);
+  // 不应该使用 kernel_pagetable了，应该使用自己的pagetable,卡我一下午
+  pagetable_t pagetable = my_kernel_pagetable();
+
+  pte = walk(pagetable, va, 0);
   if(pte == 0)
     panic("kvmpa");
   if((*pte & PTE_V) == 0)
@@ -145,6 +152,7 @@ kvmpa(uint64 va)
 // physical addresses starting at pa. va and size might not
 // be page-aligned. Returns 0 on success, -1 if walk() couldn't
 // allocate a needed page-table page.
+// 只有leaf mapping才有PTE_R|PTE_W|PTE_X的标志
 int
 mappages(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, int perm)
 {
@@ -158,7 +166,7 @@ mappages(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, int perm)
       return -1;
     if(*pte & PTE_V)
       panic("remap");
-    *pte = PA2PTE(pa) | perm | PTE_V;
+    *pte = PA2PTE(pa) | perm | PTE_V;  //if(va == VIRTIO0) printf("%p\n",*pte);
     if(a == last)
       break;
     a += PGSIZE;
@@ -221,6 +229,8 @@ uvminit(pagetable_t pagetable, uchar *src, uint sz)
   memset(mem, 0, PGSIZE);
   mappages(pagetable, 0, PGSIZE, (uint64)mem, PTE_W|PTE_R|PTE_X|PTE_U);
   memmove(mem, src, sz);
+
+
 }
 
 // Allocate PTEs and physical memory to grow process from oldsz to
@@ -230,6 +240,9 @@ uvmalloc(pagetable_t pagetable, uint64 oldsz, uint64 newsz)
 {
   char *mem;
   uint64 a;
+
+// 要向上取整  
+  if(PGROUNDUP(newsz) > PLIC) return 0; //虚拟内存  限制不要超过PLIC
 
   if(newsz < oldsz)
     return oldsz;
@@ -271,18 +284,20 @@ uvmdealloc(pagetable_t pagetable, uint64 oldsz, uint64 newsz)
 
 // Recursively free page-table pages.
 // All leaf mappings must already have been removed.
+// 只要求leaf mapping也就是最后一级的表项都是0
+// 释放页表所有内存，释放完leaf mapping就结束
 void
 freewalk(pagetable_t pagetable)
 {
   // there are 2^9 = 512 PTEs in a page table.
   for(int i = 0; i < 512; i++){
     pte_t pte = pagetable[i];
-    if((pte & PTE_V) && (pte & (PTE_R|PTE_W|PTE_X)) == 0){
+    if((pte & PTE_V) && (pte & (PTE_R|PTE_W|PTE_X)) == 0){ 
       // this PTE points to a lower-level page table.
       uint64 child = PTE2PA(pte);
       freewalk((pagetable_t)child);
       pagetable[i] = 0;
-    } else if(pte & PTE_V){
+    } else if(pte & PTE_V){  //只有leaf mapping才可能有PTE_R|PTE_W|PTE_X，到这里说明叶子表项没有被清0
       panic("freewalk: leaf");
     }
   }
@@ -295,7 +310,7 @@ void
 uvmfree(pagetable_t pagetable, uint64 sz)
 {
   if(sz > 0)
-    uvmunmap(pagetable, 0, PGROUNDUP(sz)/PGSIZE, 1);
+    uvmunmap(pagetable, 0, PGROUNDUP(sz)/PGSIZE, 1);  // 标志是1 物理内存也被释放了
   freewalk(pagetable);
 }
 
@@ -379,6 +394,9 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
 int
 copyin(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len)
 {
+
+  return copyin_new(pagetable, dst, srcva, len);
+
   uint64 n, va0, pa0;
 
   while(len > 0){
@@ -405,6 +423,9 @@ copyin(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len)
 int
 copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
 {
+
+  copyinstr_new(pagetable, dst, srcva, max);
+
   uint64 n, va0, pa0;
   int got_null = 0;
 
@@ -440,3 +461,171 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
     return -1;
   }
 }
+
+
+// 递归打印页表
+static void recursive_vmprint(pagetable_t pagetable, int depth) {
+  if(depth > 3) return;    // 经过实验，页表只有三级
+  for(int i = 0; i < 512; i++) {
+    pte_t pte = pagetable[i];
+    if(pte & PTE_V){
+      uint64 child = PTE2PA(pte);
+      for(int j = 0; j < depth; ++j) {
+        if(j > 0) printf(" ");
+        printf("..");
+      }
+      printf("%d: pte %p pa %p\n", i, pte, child);
+
+      recursive_vmprint((pagetable_t)child, depth+1);
+    
+    } /*else if(pte & PTE_V){
+      panic("freewalk: leaf");
+    }*/
+  }
+}
+// 一个页表占4096个字节，一个pte表项占8字节，所以有512个表项
+void vmprint(pagetable_t pagetable) {
+  printf("page table %p\n",pagetable);
+  recursive_vmprint(pagetable, 1);
+}
+// kvmmap的进程内核页表版本
+int proc_kvmmap(pagetable_t kp, uint64 va, uint64 pa, uint64 sz, int perm)
+{                                            
+  if(mappages(kp, va, sz, pa, perm) != 0) return -1;
+    //panic("proc_kvmmap");
+  else  return 0;
+}
+/*
+pagetable_t copy_kernel_pagetable() {
+  return kernel_pagetable;
+}
+*/
+
+pagetable_t kernel_pagetable_create() {
+
+  pagetable_t new_kernel_pagetable = (pagetable_t) kalloc();
+
+  if(new_kernel_pagetable == 0) {   // printf("noooooooooo\n");
+    return 0;
+  }
+  memset(new_kernel_pagetable, 0, PGSIZE);
+
+  // uart registers
+  if(proc_kvmmap(new_kernel_pagetable, UART0, UART0, PGSIZE, PTE_R | PTE_W) != 0) return 0;
+
+  // virtio mmio disk interface
+  if(proc_kvmmap(new_kernel_pagetable, VIRTIO0, VIRTIO0, PGSIZE, PTE_R | PTE_W)!= 0) return 0;
+
+  // CLINT
+  //if(proc_kvmmap(new_kernel_pagetable, CLINT, CLINT, 0x10000, PTE_R | PTE_W)!= 0) return 0;
+
+  // PLIC
+  if(proc_kvmmap(new_kernel_pagetable, PLIC, PLIC, 0x400000, PTE_R | PTE_W)!= 0) return 0;
+
+  // map kernel text executable and read-only.
+  if(proc_kvmmap(new_kernel_pagetable, KERNBASE, KERNBASE, (uint64)etext-KERNBASE, PTE_R | PTE_X)!= 0) return 0;
+
+  // map kernel data and the physical RAM we'll make use of.
+  if(proc_kvmmap(new_kernel_pagetable, (uint64)etext, (uint64)etext, PHYSTOP-(uint64)etext, PTE_R | PTE_W)!= 0) return 0;
+
+  // map the trampoline for trap entry/exit to
+  // the highest virtual address in the kernel.
+  if(proc_kvmmap(new_kernel_pagetable, TRAMPOLINE, (uint64)trampoline, PGSIZE, PTE_R | PTE_X)!= 0) return 0;
+
+/*
+  uint64 a = *walk(new_kernel_pagetable,TRAMPOLINE, 0);
+  uint64 b = *walk(kernel_pagetable, TRAMPOLINE ,0);
+  uint64 c = TRAMPOLINE;
+  c = (c>>12)<<10;
+  printf("%p %p %p\n", a, b, c);
+  if(a!=b) {
+    //printf("%p %p %p", a, b, UART0);
+    panic("error!!!!!!!!!!");
+  }
+*/
+  return new_kernel_pagetable;
+}
+
+// kvminithart的进程内核栈版本
+void proc_kvminithart(pagetable_t proc_kernel_pagetable) {
+  w_satp(MAKE_SATP(proc_kernel_pagetable));
+  sfence_vma();
+}
+
+
+
+// 仿照 proc_freepagetable 但不释放物理内存页
+void kernel_freepagetable(pagetable_t pagetable) {      //return;
+  
+  // there are 2^9 = 512 PTEs in a page table.
+
+for(int i = 0; i < 512; i++){
+    pte_t pte = pagetable[i];
+    if((pte & PTE_V)){
+      pagetable[i] = 0;
+      if ((pte & (PTE_R|PTE_W|PTE_X)) == 0)   // 对于非叶子节点就递归
+      {
+        uint64 child = PTE2PA(pte);
+        kernel_freepagetable((pagetable_t)child);
+
+      }
+
+    } /*else if(pte & PTE_V){
+        panic("proc free kpt: leaf");
+    }*/
+
+ }
+ kfree((void*)pagetable);
+
+
+// 如果这么挨个解除映射的话太费时间，就直接自己写个类似freewalk的函数来释放
+/*
+  uvmunmap(pagetable, UART0, 1, 0);
+  uvmunmap(pagetable, VIRTIO0, 1, 0);
+  uvmunmap(pagetable, CLINT, 16, 0);
+  uvmunmap(pagetable, PLIC, 1024, 0);
+  uvmunmap(pagetable, KERNBASE, ((uint64)etext-KERNBASE) / PGSIZE, 0);
+  uvmunmap(pagetable, (uint64)etext, (PHYSTOP-(uint64)etext) / PGSIZE, 0);
+  uvmunmap(pagetable, TRAMPOLINE, 1, 0);
+
+  freewalk(pagetable);
+
+*/
+}
+
+uint64 kvmalloc(pagetable_t pagetable, pagetable_t k_pagetable, uint64 oldsz, uint64 newsz) {
+  uint64 a;
+  /*if(newsz < oldsz)
+    return -1;*/
+  if (PGROUNDUP(newsz) > PLIC)  return -1;
+  oldsz = PGROUNDUP(oldsz);
+  for(a = oldsz; a < newsz; a += PGSIZE){
+    pte_t* pte = walk(pagetable, a, 0);
+    if(pte == 0) panic("kvmalloc: walk");
+    if(((*pte) & PTE_V) == 0) panic("kvmalloc: page not present");
+    uint64 pa = PTE2PA(*pte);
+    uint flags = PTE_FLAGS(*pte);
+    flags &= (~PTE_U); 
+    if(mappages(k_pagetable, a, PGSIZE, pa, flags) != 0) {
+      kvmdealloc(k_pagetable, a, oldsz);
+      return -1;
+      //panic("kvmalloc: mappages");
+    }
+  }
+  return 0;
+}
+
+uint64 kvmdealloc(pagetable_t k_pagetable, uint64 oldsz, uint64 newsz) {
+  if(newsz >= oldsz)
+    return oldsz;
+
+  if(PGROUNDUP(newsz) < PGROUNDUP(oldsz)){
+    int npages = (PGROUNDUP(oldsz) - PGROUNDUP(newsz)) / PGSIZE;
+    //pte_t* pte = walk(pagetable, PGROUNDUP(newsz), 0);
+    uvmunmap(k_pagetable, PGROUNDUP(newsz), npages, 0);
+  }
+
+  return newsz;   
+}
+
+//PTE_U

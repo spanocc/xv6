@@ -21,6 +21,8 @@ static void freeproc(struct proc *p);
 
 extern char trampoline[]; // trampoline.S
 
+extern pagetable_t kernel_pagetable;
+
 // initialize the proc table at boot time.
 void
 procinit(void)
@@ -34,12 +36,18 @@ procinit(void)
       // Allocate a page for the process's kernel stack.
       // Map it high in memory, followed by an invalid
       // guard page.
+
+      // 这段代码移至allocproc
+      
       char *pa = kalloc();
       if(pa == 0)
-        panic("kalloc");
+       panic("kalloc");
       uint64 va = KSTACK((int) (p - proc));
-      kvmmap(va, (uint64)pa, PGSIZE, PTE_R | PTE_W);
+      //kvmmap(va, (uint64)pa, PGSIZE, PTE_R | PTE_W);
       p->kstack = va;
+      p->kstackpa = (uint64)pa;
+      
+
   }
   kvminithart();
 }
@@ -71,6 +79,10 @@ myproc(void) {
   struct proc *p = c->proc;
   pop_off();
   return p;
+}
+
+pagetable_t my_kernel_pagetable() {
+  return myproc()->k_pagetable;
 }
 
 int
@@ -120,6 +132,26 @@ found:
     release(&p->lock);
     return 0;
   }
+  //p->k_pagetable = copy_kernel_pagetable();
+  p->k_pagetable = kernel_pagetable_create();
+  if(p->k_pagetable == 0){    
+    freeproc(p);
+    release(&p->lock);   //printf("aaaaaaaaaaaaaaaaaaa\n");
+    return 0;
+  }
+
+
+ /* char *pa = kalloc();
+  if(pa == 0)
+    panic("kalloc"); 
+  uint64 va = KSTACK((int) (p - proc));
+  p->kstack = va;*/
+
+  if(proc_kvmmap(p->k_pagetable, p->kstack, p->kstackpa, PGSIZE, PTE_R | PTE_W ) != 0) {
+    freeproc(p);
+    release(&p->lock);   //printf("bbbbbbbbbbbb\n");
+    return 0;
+  }
 
   // Set up new context to start executing at forkret,
   // which returns to user space.
@@ -141,6 +173,22 @@ freeproc(struct proc *p)
   p->trapframe = 0;
   if(p->pagetable)
     proc_freepagetable(p->pagetable, p->sz);
+/*在procinit里创建内核栈，就不用释放了
+  // 释放内核栈空间
+  if(p->kstack) {
+    pte_t* pte = walk(p->k_pagetable, p->kstack, 0);
+    if(pte == 0) {
+      panic("freeproc: kstack");
+    kfree((void *)PTE2PA(*pte));  //内核栈是独有的，所以物理地址也要释放
+    }
+  }
+*/
+
+  // 内核页表的物理地址是共用的，所以释放内核页表的时候不应该释放物理页
+  if(p->k_pagetable) 
+    kernel_freepagetable(p->k_pagetable);
+  p->k_pagetable = 0;
+
   p->pagetable = 0;
   p->sz = 0;
   p->pid = 0;
@@ -150,6 +198,8 @@ freeproc(struct proc *p)
   p->killed = 0;
   p->xstate = 0;
   p->state = UNUSED;
+
+
 }
 
 // Create a user page table for a given process,
@@ -190,9 +240,9 @@ proc_pagetable(struct proc *p)
 void
 proc_freepagetable(pagetable_t pagetable, uint64 sz)
 {
-  uvmunmap(pagetable, TRAMPOLINE, 1, 0);
+  uvmunmap(pagetable, TRAMPOLINE, 1, 0); // 标志是0 不释放物理内存
   uvmunmap(pagetable, TRAPFRAME, 1, 0);
-  uvmfree(pagetable, sz);
+  uvmfree(pagetable, sz);  // 标志是1 物理内存也被释放了
 }
 
 // a user program that calls exec("/init")
@@ -230,6 +280,13 @@ userinit(void)
 
   p->state = RUNNABLE;
 
+// 将一个进程的用户页表映射到userinit的内核页表里
+   kvmalloc(p->pagetable, p->k_pagetable, 0, PGSIZE);
+/*  pte_t* pte = walk(p->pagetable, 0, 0);
+  uint flags = PTE_FLAGS(*pte);
+  flags &= (~PTE_U);
+  mappages(p->k_pagetable, 0, PGSIZE, PTE2PA(*pte), flags);
+*/
   release(&p->lock);
 }
 
@@ -237,7 +294,7 @@ userinit(void)
 // Return 0 on success, -1 on failure.
 int
 growproc(int n)
-{
+{                     // printf("growproc!\n");
   uint sz;
   struct proc *p = myproc();
 
@@ -246,8 +303,11 @@ growproc(int n)
     if((sz = uvmalloc(p->pagetable, sz, sz + n)) == 0) {
       return -1;
     }
+    if(kvmalloc(p->pagetable, p->k_pagetable, p->sz, p->sz+n) < 0) return -1;
   } else if(n < 0){
+    //kvmdealloc(p->pagetable, p->k_pagetable, sz, sz-n); //要在用户页表释放之前释放内核
     sz = uvmdealloc(p->pagetable, sz, sz + n);
+    kvmdealloc(p->k_pagetable, p->sz, p->sz+n) ;
   }
   p->sz = sz;
   return 0;
@@ -257,23 +317,31 @@ growproc(int n)
 // Sets up child kernel stack to return as if from fork() system call.
 int
 fork(void)
-{
+{                    // printf("fork!\n");
   int i, pid;
   struct proc *np;
   struct proc *p = myproc();
 
   // Allocate process.
-  if((np = allocproc()) == 0){
+  if((np = allocproc()) == 0){  // printf("qqqqqqqqqqqqqq\n");
     return -1;
   }
 
   // Copy user memory from parent to child.
   if(uvmcopy(p->pagetable, np->pagetable, p->sz) < 0){
     freeproc(np);
-    release(&np->lock);
+    release(&np->lock);         //  printf("aaaaaaaaaaaaaaaa\n");
     return -1;
   }
   np->sz = p->sz;
+
+  // 映射到内核
+
+  if(kvmalloc(np->pagetable, np->k_pagetable, 0, np->sz) < 0) {
+    freeproc(np); 
+    release(&np->lock);        // printf("ccccccccccccccc\n");
+    return -1;
+  }
 
   np->parent = p;
 
@@ -294,6 +362,15 @@ fork(void)
   pid = np->pid;
 
   np->state = RUNNABLE;
+
+ /*for(int i = 0; i < np->sz; i += PGSIZE) {
+    pte_t* pte = walk(np->pagetable, i, 0);
+    uint64 pa = PTE2PA(*pte);
+    uint flags = PTE_FLAGS(*pte);
+    flags &= (~PTE_U);
+    mappages(np->k_pagetable, i, PGSIZE, pa, flags);
+  }*/
+
 
   release(&np->lock);
 
@@ -473,19 +550,33 @@ scheduler(void)
         // before jumping back to us.
         p->state = RUNNING;
         c->proc = p;
-        swtch(&c->context, &p->context);
 
+        proc_kvminithart(p->k_pagetable); // 放在swtch上面？
+        swtch(&c->context, &p->context);
+        //proc_kvminithart(p->k_pagetable);
+    
         // Process is done running for now.
         // It should have changed its p->state before coming back.
         c->proc = 0;
+
+        // 要放在这里才能过  没有进程就选择内核栈
+        kvminithart();
 
         found = 1;
       }
       release(&p->lock);
     }
+    // 不能放在这
+    /*if(found == 0) {
+      kvminithart();
+    }*/
+
 #if !defined (LAB_FS)
     if(found == 0) {
       intr_on();
+
+      //kvminithart();
+
       asm volatile("wfi");
     }
 #else

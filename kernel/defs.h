@@ -109,6 +109,8 @@ int             either_copyout(int user_dst, uint64 dst, void *src, uint64 len);
 int             either_copyin(void *dst, int user_src, uint64 src, uint64 len);
 void            procdump(void);
 
+pagetable_t     my_kernel_pagetable() ;
+
 // swtch.S
 void            swtch(struct context*, struct context*);
 
@@ -178,6 +180,22 @@ uint64          walkaddr(pagetable_t, uint64);
 int             copyout(pagetable_t, uint64, char *, uint64);
 int             copyin(pagetable_t, char *, uint64, uint64);
 int             copyinstr(pagetable_t, char *, uint64, uint64);
+pte_t *         walk(pagetable_t pagetable, uint64 va, int alloc);
+
+void            vmprint(pagetable_t);
+int             proc_kvmmap(pagetable_t kp, uint64 va, uint64 pa, uint64 sz, int perm);
+pagetable_t     kernel_pagetable_create();
+void            proc_kvminithart(pagetable_t proc_kernel_pagetable);
+void            kernel_freepagetable(pagetable_t pagetable);
+
+pagetable_t     copy_kernel_pagetable();
+
+int             copyinstr_new(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max);
+int             copyin_new(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len);
+uint64          kvmalloc(pagetable_t pagetable, pagetable_t k_pagetable, uint64 oldsz, uint64 newsz);
+uint64          kvmdealloc(pagetable_t k_pagetable, uint64 oldsz, uint64 newsz);
+void            freewalk(pagetable_t pagetable);
+
 
 // plic.c
 void            plicinit(void);

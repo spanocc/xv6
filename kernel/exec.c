@@ -21,6 +21,22 @@ exec(char *path, char **argv)
   pagetable_t pagetable = 0, oldpagetable;
   struct proc *p = myproc();
 
+//
+/*  pagetable_t k_pagetable = 0, k_oldpagetable;
+  k_pagetable = kernel_pagetable_create();
+  if(k_pagetable == 0) goto bad;
+  pte_t* kpte = walk(p->k_pagetable, p->kstack, 0);
+  uint64 kpa = PTE2PA(*kpte);
+  uint kflag = PTE_FLAGS(*kpte);
+  kflag &= (~PTE_U);
+  proc_kvmmap(k_pagetable, p->kstack, kpa, PGSIZE, kflag);
+*/
+//
+ 
+  //uvmunmap(p->k_pagetable, 0, PGROUNDUP(p->sz)/PGSIZE, 0);
+  //freewalk(p->k_pagetable);
+
+
   begin_op();
 
   if((ip = namei(path)) == 0){
@@ -110,17 +126,37 @@ exec(char *path, char **argv)
     
   // Commit to the user image.
   oldpagetable = p->pagetable;
+  //k_oldpagetable = p->k_pagetable;
   p->pagetable = pagetable;
+
+  kvmdealloc(p->k_pagetable, p->sz, 0);
+
   p->sz = sz;
   p->trapframe->epc = elf.entry;  // initial program counter = main
   p->trapframe->sp = sp; // initial stack pointer
   proc_freepagetable(oldpagetable, oldsz);
+
+  for(int i = 0; i < p->sz; i += PGSIZE) {
+    pte_t* pte = walk(p->pagetable, i, 0);
+    uint64 pa = PTE2PA(*pte);
+    uint flags = PTE_FLAGS(*pte);
+    flags &= (~PTE_U);
+    if(mappages(p->k_pagetable, i, PGSIZE, pa, flags) != 0) {
+      goto bad;
+    }
+  }
+
+
+
+  if(p->pid==1) vmprint(p->pagetable);
 
   return argc; // this ends up in a0, the first argument to main(argc, argv)
 
  bad:
   if(pagetable)
     proc_freepagetable(pagetable, sz);
+  /*if(k_pagetable)
+    kernel_freepagetable(k_pagetable);*/
   if(ip){
     iunlockput(ip);
     end_op();

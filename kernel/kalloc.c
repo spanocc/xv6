@@ -68,10 +68,11 @@ kfree(void *pa)
 void *
 kalloc(void)
 {
-  struct run *r;
+  struct run *r;   
 
   acquire(&kmem.lock);
-  r = kmem.freelist;
+  r = kmem.freelist;  //printf("%p\n",r);
+  //if((uint64)r > 0xC000000) return 0; 分配的是物理内存
   if(r)
     kmem.freelist = r->next;
   release(&kmem.lock);
