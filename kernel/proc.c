@@ -127,6 +127,9 @@ found:
   p->context.ra = (uint64)forkret;
   p->context.sp = p->kstack + PGSIZE;
 
+  p->have_tricked = 0;
+  p->as.handler_now = 0;
+
   return p;
 }
 

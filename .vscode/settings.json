@@ -1,0 +1,7 @@
+{
+    "files.associations": {
+        "string_view": "c",
+        "system_error": "c",
+        "defs.h": "c"
+    }
+}
