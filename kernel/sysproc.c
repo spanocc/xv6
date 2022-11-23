@@ -47,8 +47,16 @@ sys_sbrk(void)
   if(argint(0, &n) < 0)
     return -1;
   addr = myproc()->sz;
-  if(growproc(n) < 0)
-    return -1;
+
+  // n是负数就直接释放内存，且uvmunmap对于没映射的内存也能正确处理，不会panic
+  if(n < 0) {
+    uvmdealloc(myproc()->pagetable, addr, addr+n);
+  }
+
+  myproc()->sz += n;
+
+  //if(growproc(n) < 0)
+  //  return -1;
   return addr;
 }
 
