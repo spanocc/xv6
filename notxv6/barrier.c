@@ -30,6 +30,18 @@ barrier()
   // Block until all threads have called barrier() and
   // then increment bstate.round.
   //
+
+  pthread_mutex_lock(&bstate.barrier_mutex);
+  if(++bstate.nthread == nthread) {   // printf("come\n");
+    bstate.round++;
+    bstate.nthread = 0;
+    pthread_mutex_unlock(&bstate.barrier_mutex);
+    pthread_cond_broadcast(&bstate.barrier_cond);  // printf("go\n");
+  }
+  else {   
+    pthread_cond_wait(&bstate.barrier_cond, &bstate.barrier_mutex);
+    pthread_mutex_unlock(&bstate.barrier_mutex);
+  }
   
 }
 
@@ -43,8 +55,8 @@ thread(void *xa)
   for (i = 0; i < 20000; i++) {
     int t = bstate.round;
     assert (i == t);
-    barrier();
-    usleep(random() % 100);
+    barrier();         //printf("sleep1\n");
+    usleep(random() % 100);  //printf("sleep2\n");
   }
 
   return 0;

@@ -12,9 +12,23 @@
 
 
 struct thread {
+  uint64 ra;
+  uint64 sp;
+  uint64 s0;
+  uint64 s1;
+  uint64 s2;
+  uint64 s3;
+  uint64 s4;
+  uint64 s5;
+  uint64 s6;
+  uint64 s7;
+  uint64 s8;
+  uint64 s9;
+  uint64 s10;
+  uint64 s11;
   char       stack[STACK_SIZE]; /* the thread's stack */
   int        state;             /* FREE, RUNNING, RUNNABLE */
-
+  //void       (*func)();
 };
 struct thread all_thread[MAX_THREAD];
 struct thread *current_thread;
@@ -38,6 +52,7 @@ thread_schedule(void)
   struct thread *t, *next_thread;
 
   /* Find another runnable thread. */
+  /* 找一圈 */
   next_thread = 0;
   t = current_thread + 1;
   for(int i = 0; i < MAX_THREAD; i++){
@@ -55,7 +70,7 @@ thread_schedule(void)
     exit(-1);
   }
 
-  if (current_thread != next_thread) {         /* switch threads?  */
+  if (current_thread != next_thread) {         /* switch threads?  */  //printf("come!!!!!\n");
     next_thread->state = RUNNING;
     t = current_thread;
     current_thread = next_thread;
@@ -63,6 +78,8 @@ thread_schedule(void)
      * Invoke thread_switch to switch from t to next_thread:
      * thread_switch(??, ??);
      */
+    thread_switch((uint64)t, (uint64)current_thread);
+
   } else
     next_thread = 0;
 }
@@ -77,6 +94,9 @@ thread_create(void (*func)())
   }
   t->state = RUNNABLE;
   // YOUR CODE HERE
+  //t->func = func;
+  t->sp = (uint64)(t->stack + STACK_SIZE);
+  t->ra = (uint64)func;
 }
 
 void 
@@ -140,7 +160,7 @@ thread_c(void)
   
   for (i = 0; i < 100; i++) {
     printf("thread_c %d\n", i);
-    c_n += 1;
+    c_n += 1;                    
     thread_yield();
   }
   printf("thread_c: exit after %d\n", c_n);
@@ -157,7 +177,7 @@ main(int argc, char *argv[])
   thread_init();
   thread_create(thread_a);
   thread_create(thread_b);
-  thread_create(thread_c);
+  thread_create(thread_c);   
   thread_schedule();
   exit(0);
 }
