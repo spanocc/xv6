@@ -67,6 +67,32 @@ usertrap(void)
     syscall();
   } else if((which_dev = devintr()) != 0){
     // ok
+  } else if(r_scause() == 15 ) {  //只能判断15, 不能判断13,13有其他错误
+    
+    pte_t *pte;
+    uint64 addr = r_stval();
+    uint64 pa;
+    addr = PGROUNDDOWN(addr);
+    if((pte = walk(p->pagetable, addr, 0)) == 0) {   //printf("usertrap: walk\n");
+      p->killed = 1;
+    } else {
+      pa = PTE2PA(*pte);
+      char *mem = kalloc();
+      if(mem == 0) {         //printf("usertrap: mem\n");
+        p->killed = 1;
+      } else {
+        memmove(mem, (void *)pa, PGSIZE);
+        int flags = PTE_FLAGS(*pte); 
+        flags &= (~PTE_RSW);
+        flags |= (PTE_W);
+        uvmunmap(p->pagetable, addr, 1, 1); //要删除物理页的引用计数
+        if(mappages(p->pagetable, addr, PGSIZE, (uint64)mem, flags) != 0){   printf("usertrap: walk\n");
+          kfree(mem);
+          p->killed = 1;
+        }
+      }
+    }
+
   } else {
     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
     printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
