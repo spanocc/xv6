@@ -5,8 +5,9 @@ struct buf {
   uint blockno;
   struct sleeplock lock;
   uint refcnt;
-  struct buf *prev; // LRU cache list
-  struct buf *next;
+  int ticks;
+  //struct buf *prev; // LRU cache list
+  struct buf *next;   //只需要单向链表即可，通过ticks来找LRU
   uchar data[BSIZE];
 };
 
