@@ -102,6 +102,32 @@ e1000_transmit(struct mbuf *m)
   // the TX descriptor ring so that the e1000 sends it. Stash
   // a pointer so that it can be freed after sending.
   //
+  acquire(&e1000_lock);
+
+  uint32 index = regs[E1000_TDT];
+  if(index >= TX_RING_SIZE) {
+    release(&e1000_lock);
+    //panic("transmit: overflow");
+    return -1;
+  }
+  if(!(tx_ring[index].status & E1000_TXD_STAT_DD)) {
+    release(&e1000_lock);
+    return -1;
+  }
+  if(tx_mbufs[index]) {
+    mbuffree(tx_mbufs[index]);
+    tx_mbufs[index] = 0;
+  }
+
+  tx_ring[index].addr = (uint64)m->head;
+  tx_ring[index].length = m->len;
+  tx_ring[index].cmd = E1000_TXD_CMD_RS | E1000_TXD_CMD_EOP;
+  tx_mbufs[index] = m;
+
+  regs[E1000_TDT] = (regs[E1000_TDT] + 1 ) % TX_RING_SIZE;
+  
+
+  release(&e1000_lock);
   
   return 0;
 }
@@ -115,6 +141,31 @@ e1000_recv(void)
   // Check for packets that have arrived from the e1000
   // Create and deliver an mbuf for each packet (using net_rx()).
   //
+
+  // 此处不能上锁， 不然会panic acquire
+  //acquire(&e1000_lock);
+  uint32 index = (regs[E1000_RDT] + 1) % RX_RING_SIZE;
+  // 扫描，找到一个空闲的就结束
+  while(rx_ring[index].status & E1000_RXD_STAT_DD) {
+    rx_mbufs[index]->len = rx_ring[index].length;
+    net_rx(rx_mbufs[index]);
+    struct mbuf* newbuf = mbufalloc(0);
+    if(newbuf == 0) {
+      panic("recv: mbufalloc");
+    }
+    rx_mbufs[index] = newbuf;
+    rx_ring[index].addr = (uint64)rx_mbufs[index]->head;
+    rx_ring[index].status = 0;
+
+    // 把regs[E1000_RDT]置为最后访问的那个索引值
+    //regs[E1000_RDT] = index;
+
+    index = (index + 1) % RX_RING_SIZE;
+  }
+  if(index == 0) regs[E1000_RDT] = 15;
+  else regs[E1000_RDT] = index - 1;
+
+  //release(&e1000_lock);
 }
 
 void
