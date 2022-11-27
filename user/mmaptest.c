@@ -49,7 +49,7 @@ _v1(char *p)
         err("v1 mismatch (2)");
       }
     }
-  }
+  }   
 }
 
 //
@@ -232,10 +232,11 @@ mmap_test(void)
   if(memcmp(p2, "67890", 5) != 0)
     err("mmap2 mismatch");
 
-  munmap(p1, PGSIZE);
+
+  munmap(p1, PGSIZE);   
   if(memcmp(p2, "67890", 5) != 0)
     err("mmap2 mismatch (2)");
-  munmap(p2, PGSIZE);
+  munmap(p2, PGSIZE); // printf("gooo\n");
   
   printf("test mmap two files: OK\n");
   

@@ -484,3 +484,137 @@ sys_pipe(void)
   }
   return 0;
 }
+
+uint64 sys_mmap(void) {
+
+  uint64 addr, length;
+  int prot, flags, fd, offset;
+  struct proc* p = myproc();
+  if(argaddr(0, &addr) < 0)
+    return -1;
+  if(argaddr(1, &length) < 0)
+    return -1;
+  if(argint(2, &prot) < 0)
+    return -1;
+  if(argint(3, &flags) < 0)
+    return -1;
+  if(argint(4, &fd) < 0)
+    return -1;
+  if(argint(5, &offset) < 0)
+    return -1;
+
+  /*if((flags & MAP_SHARED) && (prot & PROT_WRITE) == 0) {
+    printf("11111111111111111\n");
+    return -1;
+  }*/
+  if(!p->ofile[fd]->writable) {
+    if((prot & PROT_WRITE) && !(flags & MAP_PRIVATE)) {
+      //printf("2222222\n");
+      return -1;
+    }
+  }
+
+  if(addr != 0 || offset != 0) {
+    panic("sys_mmap: addr / offset");
+  }
+  if(p->vma_cnt >= NOFILE) {
+    panic("sys_mmap: vma_cnt over");
+  }
+  struct VMA* vp = &(p->vma[p->vma_cnt++]);
+  addr = p->sz;                                    if(p->sz % PGSIZE != 0 || length % PGSIZE != 0) panic("sys_mmap: not align");
+  p->sz += length;
+ 
+  vp->start = addr;
+  vp->addr = addr;
+  vp->len = length;
+  vp->fd = fd;
+  vp->prot = prot;
+  vp->flags = flags;
+  vp->filep = p->ofile[fd];
+
+
+  filedup(vp->filep);
+/*
+  begin_op();
+  ilock(vp->filep->ip);
+
+  vp->filep->ip->ref++;
+  iupdate(vp->filep->ip);
+
+  iunlock(vp->filep->ip);
+
+
+  end_op();
+*/
+  return addr;
+}
+
+
+// 调用的map 和munmap的长度都是以PGSIZE为单位的，都是页面对齐的
+uint64 sys_munmap(void) {   //return -1;
+
+  struct proc* p = myproc();
+  struct VMA* vp = 0;
+  uint64 addr, length;
+  if(argaddr(0, &addr) < 0)
+    return -1;
+  if(argaddr(1, &length) < 0)
+    return -1;
+  for(int i = 0; i < p->vma_cnt; ++i) {
+    if(addr >= p->vma[i].addr && addr < p->vma[i].addr + p->vma[i].len) {
+      vp = &(p->vma[i]);
+      if(addr + length > p->vma[i].addr + p->vma[i].len) panic("sys_munmap:length too big");
+    }
+  }
+  if(vp == 0) panic("not find addr");
+
+                                            if(addr % PGSIZE != 0 || length % PGSIZE != 0) panic("sys_munmap: not align");
+
+  if((vp->flags & MAP_SHARED) && (vp->prot & PROT_WRITE) != 0 ) {
+    //if((vp->prot & PROT_WRITE) == 0) panic("sys_munmap: map_shared but not prot_write");
+
+    begin_op();
+    ilock(vp->filep->ip);
+    //printf("%p %d %d\n", (uint64)addr, (uint)(addr - vp->addr), (uint)length);
+    if(writei(vp->filep->ip, 1, (uint64)addr, (uint)(addr - vp->start), (uint)length) < 0) {
+      iunlock(vp->filep->ip);
+      end_op();
+      panic("sys_munmap: writei");
+    }
+    //iupdate(vp->filep->ip);
+    iunlock(vp->filep->ip);
+    end_op();
+
+  }            //printf("cccccccccccccccccc\n");
+  uvmunmap(p->pagetable, vp->addr, length / PGSIZE, 1);
+  if(addr == vp->addr) { // 要么在开头
+    vp->addr = addr + length;
+    vp->len -= length;
+  } else if(addr + length == vp->addr + vp->len) {  // 要么在结尾
+    vp->len -= length;
+  } else panic("munmap not true");
+
+  if(vp->len == 0) {
+    
+    fileclose(vp->filep);
+/*
+    begin_op();
+    ilock(vp->filep->ip);
+    iput(vp->filep->ip);
+    //iupdate(vp->filep->ip->ref);
+    iunlockput(vp->filep->ip);
+    end_op();
+*/
+    p->vma_cnt--;
+    vp->start = p->vma[p->vma_cnt].start;
+    vp->addr  = p->vma[p->vma_cnt].addr;
+    vp->len   = p->vma[p->vma_cnt].len;
+    vp->prot  = p->vma[p->vma_cnt].prot;
+    vp->flags = p->vma[p->vma_cnt].flags;
+    vp->fd    = p->vma[p->vma_cnt].fd;
+    vp->filep = p->vma[p->vma_cnt].filep;
+    
+  }
+
+  return 0;
+}

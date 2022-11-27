@@ -5,6 +5,10 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
+#include "fcntl.h"
+#include "sleeplock.h"
+#include "fs.h"
+#include "file.h"
 
 struct spinlock tickslock;
 uint ticks;
@@ -67,6 +71,60 @@ usertrap(void)
     syscall();
   } else if((which_dev = devintr()) != 0){
     // ok
+  } else if(r_scause() == 15 || r_scause() == 13) {
+    uint64 addr = r_stval();                           //  printf("a:%p  %d\n",addr, r_scause());
+    
+
+    struct VMA* vp = 0;
+    for(int i = 0; i < p->vma_cnt; ++i) {
+      if(addr >= p->vma[i].addr && addr < p->vma[i].addr + p->vma[i].len) {
+        vp = &(p->vma[i]);
+        break;
+      }
+    }    
+    //addr = PGROUNDDOWN(addr);
+                      //printf("come!!!!!!!!\n");
+    if(vp == 0 || vp->filep == 0 ) {
+      p->killed = 1;
+      exit(-1);
+    }
+
+
+    char *mem = kalloc();
+    memset(mem, 0, PGSIZE);
+    if(mem == 0) {
+      p->killed = 1;
+      exit(-1);
+    } 
+
+    int flags = PTE_U;
+    if((vp->prot) & PROT_READ) flags |= PTE_R;
+    if((vp->prot) & PROT_WRITE) flags |= PTE_W;
+
+
+    //printf("addr:%p  %d\n", addr,flags);
+    begin_op();
+    //printf("ref: %d\n",vp->filep->ip->ref);
+    ilock(vp->filep->ip);
+
+    if(readi(vp->filep->ip, 0, (uint64)mem, addr-vp->start, PGSIZE) < 0) {
+      iunlock(vp->filep->ip);
+      end_op();
+      panic("usertrap: readi");
+      p->killed = 1;
+      exit(-1);
+    }
+    iunlock(vp->filep->ip);
+    //printf("ref: %d\n",vp->filep->ip->ref);
+    end_op();
+    
+    
+    if(mappages(p->pagetable, PGROUNDDOWN(addr), PGSIZE, (uint64)mem, flags) != 0) {  
+      panic("usertrap: mappages");
+      p->killed = 1;
+      exit(-1);
+    }
+
   } else {
     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
     printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());

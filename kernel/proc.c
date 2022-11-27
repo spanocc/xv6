@@ -48,6 +48,8 @@ procinit(void)
   for(p = proc; p < &proc[NPROC]; p++) {
       initlock(&p->lock, "proc");
       p->kstack = KSTACK((int) (p - proc));
+      
+      p->vma_cnt = 0;
   }
 }
 
@@ -282,6 +284,31 @@ fork(void)
   }
   np->sz = p->sz;
 
+  np->vma_cnt = p->vma_cnt;
+  for(int i = 0; i < p->vma_cnt; ++i) {
+    np->vma[i].start = p->vma[i].start;
+    np->vma[i].addr  = p->vma[i].addr;
+    np->vma[i].len   = p->vma[i].len;
+    np->vma[i].fd    = p->vma[i].fd;
+    np->vma[i].prot  = p->vma[i].prot;
+    np->vma[i].flags = p->vma[i].flags;
+    np->vma[i].filep = p->vma[i].filep;
+    filedup(np->vma[i].filep);
+    uint64 addr = p->vma[i].addr;
+    for(; addr < p->vma[i].addr + p->vma[i].len; addr += PGSIZE) {
+      pte_t* pte = walk(p->pagetable, addr, 0);
+      uint64 pa = PTE2PA(*pte);
+      if(pte == 0) {
+        continue;
+      }
+      int flags = PTE_FLAGS(*pte);
+      if(walk(np->pagetable, addr, 0)) continue;
+      if(mappages(np->pagetable, addr, PGSIZE, pa, flags) != 0) {
+        panic("fork vma mappages");
+      }
+    }    
+  }
+
   np->parent = p;
 
   // copy saved user registers.
@@ -352,6 +379,14 @@ exit(int status)
       p->ofile[fd] = 0;
     }
   }
+  // 仅仅是关闭文件，用户空间的内存在父进程调用wait的时候会释放
+  for(int i = 0; i < p->vma_cnt; ++i) {
+    if(p->vma[i].filep) {
+      fileclose(p->vma[i].filep);
+      p->vma[i].filep = 0;
+    }
+  }
+
 
   begin_op();
   iput(p->cwd);
