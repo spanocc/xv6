@@ -131,7 +131,7 @@ usertrap(void)
       }
     }
 
-    yield();
+    yield(); //调度到其他进程,等回来的时候再执行usertrapret,恢复状态
   }
 
 
